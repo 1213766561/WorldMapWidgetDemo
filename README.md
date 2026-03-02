@@ -1,66 +1,97 @@
-概览
-•	插件职责：在 World 作用域管理“地图图标”（注册、更新、移除、世界/地图坐标转换、批量/延迟更新与 UI 通知）。
-•	运行时范围：继承自 UTickableWorldSubsystem，支持每帧处理（批量更新/平滑等）。
-•	设计要点：使用弱指针避免 Actor 挂起导致悬空引用；使用软引用支持延迟/异步加载图集或 widget class；采用增量变更（ChangedList）以减少 UI 更新开销。
-•	注意：类名 UWroldMapIconSubsystem 保留了代码中原有拼写（注释提及为兼容性保留）。
-文件清单（主要公开定义）
-•	WorldMapIconSubsystem.h — 子系统核心 API、事件、内部数据结构声明。
-•	WorldMapIconType.h — 数据结构（FMapSettingStruct、FMapIconStruct、FMapIconSettingStruct）、工具函数（坐标转换、异步加载）。
-•	WorldMapIconInterface.h — UI/Widget 交互接口 IWorldMapIconInterface（OnMapIconDataChange）。
-主要类型（摘要）
-•	FMapSettingStruct
-•	地图配置：MapName、WorldMap_LeftTop（世界左上角）、WorldMap_WorldScale、WorldMap_MapScale、WorldMap_Texture（TSoftObjectPtr<UTexture2D>）。
-•	FMapIconStruct
-•	图标实例：MapIcon_ID（int）、MapIcon_Type（FName）、MapIcon_ExtraPram（TMap<FName,FString>，用于 Location/Rotation/Scale/OwnID 等）。
-•	方法：UpdateMapIconData(const FMapIconStruct& Target, TArray<FName>& ChangedList) — 合并数据并把发生变化的键追加到 ChangedList（用于增量广播）。
-•	FMapIconSettingStruct
-•	类型配置：MapIconType、MapIconWidget（TSoftClassPtr<UObject> Conv_SoftClassPathToSoftClassRef 推荐实现 UWorldMapIconInterface）、MapIcon_BaseTexture、MapIcon_BaseSize。
-•	EWorldMapType：枚举（None / WorldMap / MiniWorldMap）。
-•	UWorldMapIconType（工具类）
-•	静态函数：WorldToMapCoordinates、MapToWorldCoordinates、AsyncLoadClass（异步加载软类并回调）。
-子系统（UWroldMapIconSubsystem）公开 API（概要）
-•	生命周期
-•	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
-•	virtual void Deinitialize() override;
-•	成员：FDelegateHandle PostLoadMapWithWorldHandle（用于地图加载后回调绑定）。
-•	Tick
-•	virtual void Tick(float DeltaTime) override; — 处理 UpdatedMapIconDataMap 中的批量/延迟更新逻辑。
-•	virtual TStatId GetStatId() const override;
-•	获取/设置
-•	static UWroldMapIconSubsystem* GetWroldMapIconSubsystem(UObject* TargetObject); — 静态帮助方法（Blueprint 可用）。
-•	void SetWorldMapSetting(const FMapSettingStruct& NewSetting);
-•	属性：UPROPERTY(BlueprintReadWrite) FMapSettingStruct WorldMapSetting;
-•	坐标转换（封装工具类）
-•	FVector2D WorldToMapCoordinates(const FVector& WorldPos)
-•	FVector MapToWorldCoordinates(const FVector2D& MapPos)
-•	注册/更新/查询/移除
-•	FMapIconStruct& GetMapIconDataByActor(AActor* TargetActor);
-•	const int& GetMapIconIDByActor(AActor* TargetActor);
-•	FMapIconStruct& GetMapIconDataByID(const int& TargetMapIconID);
-•	TArray<FMapIconStruct> GetAllMapIconDatas(); — 返回副本供 UI 刷新使用。
-•	const int& TryUpdateMapIconByActor(const FMapIconStruct& UpdateData, AActor* Target = nullptr, const bool& bRequiresFraming = true);
-•	const int& TryUpdateMapIconByID(const FMapIconStruct& UpdateData, const int& TargetMapIconID = -1, const bool& bRequiresFraming = true);
-•	void TryRemoveMapIcon(int TargetMapIconID = -1);
-•	void TryRemoveMapByActor(AActor* Target = nullptr);
-•	Actor 生命周期绑定
-•	UFUNCTION() void OnActorDestroyEvent(AActor* Target); — 用于在 Actor 销毁时清理其注册数据。
-•	事件 / 委托（Blueprint 可绑定）
-•	DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnMapIconUpdate, const FMapIconStruct&, MapIconData, const TArray<FName>&, UpdateList);
-•	广播图标更新：提供最新 FMapIconStruct 与变更字段名列表（用于增量刷新）。
-•	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMapIconRemove, const FMapIconStruct&, MapIconData);
-•	广播图标移除：提供被移除的 FMapIconStruct（副本）。
-•	DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSystemActive); — 子系统变为激活时广播。
-•	对应 UPROPERTY(BlueprintAssignable)：
-•	OnMapIconUpdate, OnMapIconRemove, OnSystemActive。
-内部数据结构（重要字段）
-•	TMap<TWeakObjectPtr<AActor>, int> RegisteredMapIconActorMap; — Actor -> MapIcon ID（弱引用避免悬挂）。
-•	TMap<int, FMapIconStruct> RegisteredMapIconDataMap; — ID -> 数据。
-•	TMap<int, FMapIconStruct> UpdatedMapIconDataMap; — 已更新但待广播/处理的数据（用于批量/延迟）。
-•	TMultiMap<FName, int> RegisteredMapIconTypeMap; — MapIcon 类型名 -> 多个 ID（按类型查询）。
-•	int MapIconID = 0; — 自增生成 ID（新建时分配）。
-•	bool bIsActive = false; — 子系统活跃标志（IsActive() 可从蓝图调用）。
-事件与行为要点
-•	更新路径：外部调用 TryUpdateMapIconByActor/ID -> 内部合并/写入 UpdatedMapIconDataMap -> 在 Tick 中批量处理 -> 触发 OnMapIconUpdate 并附带 ChangedList。
-•	删除：调用 TryRemoveMapIcon/ByActor -> 从注册表移除 -> 触发 OnMapIconRemove。
-•	Actor 销毁：子系统绑定 OnActorDestroyEvent 清理相关注册项，避免悬空。
-•	异步加载资源：TSoftObjectPtr<UObject> Conv_SoftObjPathToSoftObjRef/TSoftClassPtr<UObject> Conv_SoftClassPathToSoftClassRef + AsyncLoadClass，适用于运行时或编辑时延迟加载 Widget/贴图。
+# WorldMapIconPlugin — 功能与集成指南（中文）
+
+## 概要
+`WorldMapIconPlugin` 提供小地图 / 世界地图图标系统，支持运行时图标注册、更新、移除，以及 C++ 与 Blueprint 的友好扩展点。本文件包含功能摘要、安装与配置的逐步指引、示例代码和常见故障排查，满足分发/审核对可用文档的要求。
+
+## 主要功能
+- 运行时图标管理子系统：`UWroldMapIconSubsystem`（继承 `UTickableWorldSubsystem`），支持按帧分批更新。
+- 提供者与监听接口：
+  - `IWorldMapActorInterface`（Actor 提供图标）：`IsBeginPlayAddMapIcon()`、`GetMapIconData()`。
+  - `IWorldMapIconInterface`（监听/响应）：`OnMapIconDataChange(const FMapIconStruct&, const TArray<FName>&)`。
+- 可配置开发者设置：`UWorldMapIconSettings`（`MapIconUpdateNumEveryFrame`、`MapSettingDataTable`、`MapIconSettingDataTable`）。
+- 坐标与工具函数：`UWorldMapIconType`（世界↔地图坐标转换、异步加载辅助）。
+- Blueprint/C++ 兼容：提供 `Execute_*` 调用、BlueprintCallable/Implementable 接口。
+
+## 先决条件
+- 对应工程使用的 Unreal Engine 版本（与仓库一致）。
+- 插件不依赖第三方闭源二进制；若增加第三方依赖，需在仓库中提供下载与安装说明。
+
+## 安装（逐步）
+1. 将插件放入项目：`Plugins/WorldMapIconPlugin`（本仓库已包含）。
+2. 在编辑器启用插件：编辑 → 插件 → 找到 `WorldMapIconPlugin`，启用并重启编辑器（如需）。
+3. 生成并编译工程：
+   - 在 Windows 上右键 `.uproject` → __Generate Visual Studio project files__，打开解决方案并编译；
+   - 或使用 UnrealBuildTool / CI 流程构建模块。
+4. 验证加载：在编辑器 Output Log 检查插件加载日志。
+
+## 基本配置
+- 编辑器：Project Settings 或 Developer Settings（显示名：“小地图配置”）调整 `WorldMapIconSettings`。
+- 代码获取设置：
+  - C++: `UWorldMapIconSettings* Settings = UWorldMapIconSettings::GetWorldMapIconSettings();`
+  - Blueprint: 使用 `GetWorldMapIconSettings()` 节点。
+
+## Actor 集成（如何提供图标）
+- 在 Actor 上实现 `IWorldMapActorInterface`（C++ 或 Blueprint）。
+- C++ 最小示例：
+````````cpp
+#include "WorldMapIconInterface.h"
+
+// 我的Actor.h
+class AMyActor : public AActor, public IWorldMapActorInterface
+{
+    // ... 其他代码 ...
+    virtual bool IsBeginPlayAddMapIcon() const override { return true; }
+    virtual FMapIconStruct GetMapIconData() const override;
+};
+````````
+- Blueprint：在 Class Settings → Implemented Interfaces 添加 `WorldMapActorInterface`，实现 `IsBeginPlayAddMapIcon` 和 `GetMapIconData`。
+
+## 子系统使用（运行时）
+- 获取子系统：
+  - C++: `UWroldMapIconSubsystem* Sub = UWroldMapIconSubsystem::GetWroldMapIconSubsystem(this);`
+  - Blueprint: 使用 `GetWroldMapIconSubsystem` 节点。
+- 注册/更新/移除：调用子系统的相应 API（参见 `UWroldMapIconSubsystem` 头文件获取精确方法名）。若 Actor 返回 `IsBeginPlayAddMapIcon()` 为 true，子系统通常会在 `BeginPlay` 自动注册。
+
+## 响应图标数据变更（UI）
+- 在 Widget 或监听对象上实现 `IWorldMapIconInterface`，在 `OnMapIconDataChange` 中更新 UI。
+- 安全调用（可能为 Blueprint 实现时）：`IWorldMapIconInterface::Execute_OnMapIconDataChange(TargetObject, NewData, ChangedKeys)`。
+
+## 数据表与设置
+- 创建 DataTable（行类型对应 `FMapSettingStruct`、`FMapIconSettingStruct`），并在 `WorldMapIconSettings` 中引用。
+- 代码设置示例：
+````````cpp
+UWorldMapIconSettings* Settings = UWorldMapIconSettings::GetWorldMapIconSettings();
+if (Settings && Settings->MapSettingDataTable)
+{
+    static const FString ContextString(TEXT("MapSettingContext"));
+    TArray<FMapSettingStruct*> AllRows;
+    Settings->MapSettingDataTable->GetAllRows(ContextString, AllRows);
+
+    for (FMapSettingStruct* Row : AllRows)
+    {
+        // 使用每一行的数据...
+    }
+}
+````````
+
+## 快速 Blueprint 入门
+1. Actor Blueprint 实现 `WorldMapActorInterface`。
+2. Widget Blueprint 实现 `WorldMapIconInterface`。
+3. 在 Blueprint 中调用 `GetWroldMapIconSubsystem` 进行注册或查询。
+4. 调整 `MapIconUpdateNumEveryFrame` 以平衡性能。
+
+## 常见问题与排查
+- 插件未显示：检查 `Plugins/WorldMapIconPlugin` 是否包含 `.uplugin`，重新生成项目文件并构建。
+- Blueprint 接口未被触发：使用生成的 `Execute_*` 辅助函数或在 Blueprint 中正确实现事件。
+- 性能问题：降低 `MapIconUpdateNumEveryFrame`，或增加更新间隔并使用剖析工具（Session Frontend 等）定位瓶颈。
+
+## 合规说明
+- 文档涵盖安装、集成、使用与扩展示例。如未来引入第三方工具，须在仓库中提供下载/安装说明或链接以满足分发要求。
+
+## 参考文件
+- `Source/WorldMapIconPlugin/Public/WorldMapIconInterface.h`
+- `Source/WorldMapIconPlugin/Public/WorldMapActorInterface.h`
+- `Source/WorldMapIconPlugin/Public/WorldMapIconSettings.h`
+- `Source/WorldMapIconPlugin/Public/WorldMapIconType.h`
+- `Source/WorldMapIconPlugin/Private/WorldMapIconInterface.cpp`
+
