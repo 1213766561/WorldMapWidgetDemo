@@ -1,0 +1,26 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"EngineVersion": "4.27",
+	"FriendlyName": "WorldMapIconPlugin",
+	"Description": "A universal map system, email: 1213766561@qq.com, phone:(+86)18398540375",
+	"Category": "Other",
+	"CreatedBy": "CJ",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "WorldMapIconPlugin",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": ["Win64"]
+		}
+	]
+}
